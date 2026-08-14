@@ -183,8 +183,9 @@ def nms(monsters, iou_threshold=0.3):
         # [x1, y1, x2, y2, score, original_data]
         boxes.append([x, y, x + w, y + h, m["score"], m])
 
-    # Sort by score descending
-    boxes.sort(key=lambda x: x[4], reverse=True)
+    # Template matching uses TM_SQDIFF_NORMED, where lower scores are better.
+    # Keep the most accurate match when overlapping boxes are suppressed.
+    boxes.sort(key=lambda x: x[4])
 
     keep = []
     while boxes:
@@ -452,7 +453,33 @@ def get_minimap_loc_size(img_frame):
 
         return x_minimap, y_minimap, w_minimap, h_minimap
 
-    # logger.warning("Minimap not found in the game frame.")
+    # Chinese clients use a gray, anti-aliased minimap frame instead of a
+    # continuous pure-white rectangle. Fall back to rectangular edge detection
+    # in the top-left UI region.
+    frame_h, frame_w = img_frame.shape[:2]
+    roi_h = min(frame_h, 260)
+    roi_w = min(frame_w, 480)
+    gray = cv2.cvtColor(img_frame[:roi_h, :roi_w], cv2.COLOR_BGR2GRAY)
+    edges = cv2.Canny(gray, 50, 150)
+    contours, _ = cv2.findContours(edges, cv2.RETR_LIST,
+                                   cv2.CHAIN_APPROX_SIMPLE)
+
+    candidates = []
+    for contour in contours:
+        x, y, w, h = cv2.boundingRect(contour)
+        if not (x <= 60 and 20 <= y <= 180):
+            continue
+        if not (100 <= w <= 400 and 70 <= h <= 240):
+            continue
+        ratio = w / float(h)
+        if 1.2 <= ratio <= 3.5:
+            candidates.append((x, y, w, h))
+
+    if candidates:
+        # The content rectangle is normally the largest qualifying rectangle;
+        # duplicate contours produce the same bounding box and are harmless.
+        return max(candidates, key=lambda rect: rect[2] * rect[3])
+
     return None  # minimap not found
 
 def get_player_location_on_minimap(img_minimap, minimap_player_color=(136, 255, 255)):
@@ -470,19 +497,24 @@ def get_player_location_on_minimap(img_minimap, minimap_player_color=(136, 255, 
         (x, y): The player's location in minimap coordinates as a tuple.
                 Returns None if not enough matching pixels are found.
     """
-    mask = cv2.inRange(img_minimap,
-                        minimap_player_color,
-                        minimap_player_color)
-    coords = cv2.findNonZero(mask)
-    if coords is None or len(coords) < 4:
-        # logger.warning(f"Fail to locate player location on minimap.")
-        return None
+    target = np.array(minimap_player_color, dtype=np.int16)
+    for tolerance in [0, 10, 20, 30, 40, 50, 60]:
+        lower = np.clip(target - tolerance, 0, 255).astype(np.uint8)
+        upper = np.clip(target + tolerance, 0, 255).astype(np.uint8)
+        mask = cv2.inRange(img_minimap, lower, upper)
+        num_labels, _, stats, centroids = cv2.connectedComponentsWithStats(
+            mask, connectivity=8)
 
-    # Calculate the average location of the matching pixels
-    avg = coords.mean(axis=0)[0]  # shape (1,2), so we take [0]
-    loc_player_minimap = (int(round(avg[0])), int(round(avg[1])))
+        components = [
+            (stats[i, cv2.CC_STAT_AREA], centroids[i])
+            for i in range(1, num_labels)
+            if stats[i, cv2.CC_STAT_AREA] >= 4
+        ]
+        if components:
+            _, center = max(components, key=lambda component: component[0])
+            return (int(round(center[0])), int(round(center[1])))
 
-    return loc_player_minimap
+    return None
 
 def get_all_other_player_locations_on_minimap(img_minimap, red_bgr=(0, 0, 255)):
     '''
@@ -503,7 +535,10 @@ def get_all_other_player_locations_on_minimap(img_minimap, red_bgr=(0, 0, 255)):
         if coords is not None and len(coords) >= 3:
             logger.debug(f"Found {len(coords)} red pixels with tolerance {tolerance}")
             logger.debug(f"Color range: {lower_bgr} to {upper_bgr}")
-            return [tuple(pt[0]) for pt in coords]  # List of (x, y)
+            # OpenCV builds may expose findNonZero results as either N x 1 x 2
+            # or N x 2. Normalize both layouts before converting coordinates.
+            points = coords.reshape(-1, 2)
+            return [tuple(map(int, point)) for point in points]
 
     # 如果所有容錯範圍都檢測不到，記錄調試信息
     logger.debug(f"Red dot detection failed with all tolerances: {tolerances}")
@@ -831,7 +866,7 @@ def normalize_pixel_coordinate(coord, window_size):
 
     return (norm_x, norm_y)
 
-def resize_window(window_title, width=1296, height=759):
+def resize_window(window_title, width=1300, height=761):
     # 取得視窗句柄
     hwnd = win32gui.FindWindow(None, window_title)
     if hwnd == 0:

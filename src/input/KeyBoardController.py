@@ -5,6 +5,8 @@ Simulate user keyboard input to control character in the game
 # Standard Import
 import threading
 import time
+import ctypes
+from ctypes import wintypes
 
 # Library import
 import pyautogui
@@ -19,27 +21,123 @@ if is_mac():
 else:
     import pygetwindow as gw
 
+    KEYEVENTF_EXTENDEDKEY = 0x0001
+    KEYEVENTF_KEYUP = 0x0002
+    KEYEVENTF_SCANCODE = 0x0008
+    MAPVK_VK_TO_VSC = 0
+
+    class MOUSEINPUT(ctypes.Structure):
+        _fields_ = [
+            ("dx", wintypes.LONG),
+            ("dy", wintypes.LONG),
+            ("mouseData", wintypes.DWORD),
+            ("dwFlags", wintypes.DWORD),
+            ("time", wintypes.DWORD),
+            ("dwExtraInfo", wintypes.WPARAM),
+        ]
+
+    class KEYBDINPUT(ctypes.Structure):
+        _fields_ = [
+            ("wVk", wintypes.WORD),
+            ("wScan", wintypes.WORD),
+            ("dwFlags", wintypes.DWORD),
+            ("time", wintypes.DWORD),
+            ("dwExtraInfo", wintypes.WPARAM),
+        ]
+
+    class HARDWAREINPUT(ctypes.Structure):
+        _fields_ = [
+            ("uMsg", wintypes.DWORD),
+            ("wParamL", wintypes.WORD),
+            ("wParamH", wintypes.WORD),
+        ]
+
+    class INPUTUNION(ctypes.Union):
+        _fields_ = [("mi", MOUSEINPUT), ("ki", KEYBDINPUT),
+                    ("hi", HARDWAREINPUT)]
+
+    class INPUT(ctypes.Structure):
+        _anonymous_ = ("union",)
+        _fields_ = [("type", wintypes.DWORD), ("union", INPUTUNION)]
+
+    USER32 = ctypes.WinDLL("user32", use_last_error=True)
+    USER32.SendInput.argtypes = (
+        wintypes.UINT, ctypes.POINTER(INPUT), ctypes.c_int)
+    USER32.SendInput.restype = wintypes.UINT
+    USER32.MapVirtualKeyW.argtypes = (wintypes.UINT, wintypes.UINT)
+    USER32.MapVirtualKeyW.restype = wintypes.UINT
+    USER32.VkKeyScanW.argtypes = (wintypes.WCHAR,)
+    USER32.VkKeyScanW.restype = ctypes.c_short
+
+    SPECIAL_VIRTUAL_KEYS = {
+        "backspace": 0x08, "tab": 0x09, "enter": 0x0D, "return": 0x0D,
+        "shift": 0x10, "ctrl": 0x11, "control": 0x11, "alt": 0x12,
+        "esc": 0x1B, "escape": 0x1B, "space": 0x20,
+        "pageup": 0x21, "pagedown": 0x22, "end": 0x23, "home": 0x24,
+        "left": 0x25, "up": 0x26, "right": 0x27, "down": 0x28,
+        "insert": 0x2D, "delete": 0x2E, "del": 0x2E,
+    }
+    SPECIAL_VIRTUAL_KEYS.update({f"f{i}": 0x6F + i for i in range(1, 13)})
+    EXTENDED_KEYS = {
+        "pageup", "pagedown", "end", "home", "left", "up", "right",
+        "down", "insert", "delete", "del"
+    }
+
 pyautogui.PAUSE = 0  # remove delay
+
+def send_scan_code(key, is_key_up=False):
+    """Send a Windows keyboard event using hardware scan-code semantics."""
+    key_name = str(key).lower()
+    if key_name in SPECIAL_VIRTUAL_KEYS:
+        virtual_key = SPECIAL_VIRTUAL_KEYS[key_name]
+    elif len(key_name) == 1:
+        virtual_key = USER32.VkKeyScanW(key_name) & 0xFF
+    else:
+        raise ValueError(f"Unsupported key for SendInput: {key}")
+
+    scan_code = USER32.MapVirtualKeyW(virtual_key, MAPVK_VK_TO_VSC)
+    flags = KEYEVENTF_SCANCODE
+    if key_name in EXTENDED_KEYS:
+        flags |= KEYEVENTF_EXTENDEDKEY
+    if is_key_up:
+        flags |= KEYEVENTF_KEYUP
+
+    event = INPUT(type=1, ki=KEYBDINPUT(
+        wVk=0, wScan=scan_code, dwFlags=flags, time=0, dwExtraInfo=0))
+    sent = USER32.SendInput(1, ctypes.byref(event), ctypes.sizeof(INPUT))
+    if sent != 1:
+        error_code = ctypes.get_last_error()
+        raise OSError(error_code, f"SendInput failed for key: {key}")
 
 def key_down(key):
     '''
     Press key down
     '''
     try:
-        pyautogui.keyDown(key)
+        if is_mac():
+            pyautogui.keyDown(key)
+        else:
+            send_scan_code(key, is_key_up=False)
     except pyautogui.FailSafeException:
         logger.warning("[key_down] pyautogui failsafe triggered during key_down.")
         recover_mouse()
+    except Exception as e:
+        logger.error(f"[key_down] {e}")
 
 def key_up(key):
     '''
     Release key
     '''
     try:
-        pyautogui.keyUp(key)
+        if is_mac():
+            pyautogui.keyUp(key)
+        else:
+            send_scan_code(key, is_key_up=True)
     except pyautogui.FailSafeException:
         logger.warning("[key_up] pyautogui failsafe triggered during key_up.")
         recover_mouse()
+    except Exception as e:
+        logger.error(f"[key_up] {e}")
 
 def recover_mouse():
     '''
@@ -82,12 +180,16 @@ class KeyBoardController():
         self.t_last_screenshot = 0.0
         self.t_last_jump_down = 0.0
         self.t_last_run = time.time()
+        self.t_last_diagnostic = 0.0
         self.t_last_skill = 0.0 # Last time character perform action(attack, cast spell, ...)
         self.t_last_buff_cast = [0] * len(self.cfg["buff_skill"]["keys"]) # Last time cast buff skill
         # Flags
         self.is_enable = True
         self.is_need_force_heal = False
         self.is_terminated = False
+        self.active_window_title = ""
+        self.window_check_error = ""
+        self.last_keyboard_state = None
         # Parameters
         self.debounce_interval = self.cfg["system"]["key_debounce_interval"]
         self.fps_limit = self.cfg["system"]["fps_limit_keyboard_controller"]
@@ -115,7 +217,8 @@ class KeyBoardController():
         # Start keyboard control thread
         threading.Thread(target=self.run, daemon=True).start()
 
-        logger.info("[KeyBoardController] Init done")
+        backend = "PyAutoGUI" if is_mac() else "Windows SendInput scan codes"
+        logger.info(f"[KeyBoardController] Init done; input_backend={backend}")
 
     def toggle_enable(self):
         '''
@@ -143,7 +246,11 @@ class KeyBoardController():
         '''
         Set keyboard command
         '''
-        self.cmd_left_right, self.cmd_up_down, self.cmd_action = new_command.split()
+        command = tuple(new_command.split())
+        previous = (self.cmd_left_right, self.cmd_up_down, self.cmd_action)
+        if command != previous:
+            logger.info(f"[CommandPipeline] requested={' '.join(command)}")
+        self.cmd_left_right, self.cmd_up_down, self.cmd_action = command
 
     def is_game_window_active(self):
         '''
@@ -167,10 +274,41 @@ class KeyBoardController():
             try:
                 active_window = gw.getActiveWindow()
                 if not active_window:
+                    self.active_window_title = ""
                     return False
-                return self.window_title in active_window.title
+                self.active_window_title = active_window.title or ""
+                self.window_check_error = ""
+                return self.window_title in self.active_window_title
             except Exception as e:
+                self.window_check_error = str(e)
                 return False
+
+    def log_keyboard_diagnostic(self, game_window_active):
+        """Log why input is executed or skipped without flooding the console."""
+        now = time.time()
+        state = (self.is_enable, game_window_active, self.active_window_title,
+                 self.cmd_left_right, self.cmd_up_down, self.cmd_action,
+                 self.window_check_error)
+        if state == self.last_keyboard_state and now - self.t_last_diagnostic < 2.0:
+            return
+
+        status = "executing" if self.is_enable and game_window_active else "skipped"
+        reason = "ready"
+        if not self.is_enable:
+            reason = "controller disabled"
+        elif not game_window_active:
+            reason = "game window is not foreground"
+        if self.window_check_error:
+            reason += f"; window check error={self.window_check_error}"
+
+        logger.info(
+            f"[KeyboardDiagnostic] status={status}, reason={reason}, "
+            f"active_window={self.active_window_title!r}, "
+            f"expected_window_token={self.window_title!r}, "
+            f"command={self.cmd_left_right} {self.cmd_up_down} {self.cmd_action}"
+        )
+        self.last_keyboard_state = state
+        self.t_last_diagnostic = now
 
     def release_all_key(self):
         '''
@@ -204,7 +342,9 @@ class KeyBoardController():
         '''
         while not self.is_terminated:
             # Check if game window is active
-            if not self.is_enable or not self.is_game_window_active():
+            game_window_active = self.is_game_window_active()
+            self.log_keyboard_diagnostic(game_window_active)
+            if not self.is_enable or not game_window_active:
                 self.limit_fps()
                 continue
 
@@ -227,6 +367,8 @@ class KeyBoardController():
             ##########################
             ### Left-Right Command ###
             ##########################
+            direction_changed = self.cmd_left_right in ("left", "right") and \
+                self.cmd_left_right != self.cmd_left_right_last
             if self.cmd_left_right == "left":
                 key_up("right")
                 key_down("left")
@@ -271,11 +413,38 @@ class KeyBoardController():
             ######################
             if self.cmd_action == "jump":
                 press_key(self.cfg["key"]["jump"])
+                self.cmd_action = "none"
             elif self.cmd_action == "teleport":
                 press_key(self.cfg["key"]["teleport"])
+                self.cmd_action = "none"
             elif self.cmd_action == "attack":
-                press_key(self.attack_key)
-                self.t_last_skill = time.time()
+                attack_direction = self.cmd_left_right
+                turn_delay = 0.0
+                if direction_changed and self.cfg["bot"]["attack"] == "directional":
+                    turn_delay = self.cfg["directional_attack"].get(
+                        "character_turn_delay", 0.1)
+                    time.sleep(turn_delay)
+                if self.cmd_left_right == attack_direction:
+                    # Direction was held long enough to turn the character.
+                    # Release it before attacking so the character does not
+                    # walk through a close target during the attack animation.
+                    if self.cfg["bot"]["attack"] == "directional":
+                        key_up("left")
+                        key_up("right")
+                    press_key(self.attack_key)
+                    self.t_last_skill = time.time()
+                    logger.info(
+                        f"[AttackInput] direction={attack_direction}, "
+                        f"turned={direction_changed}, "
+                        f"turn_delay={turn_delay:.3f}s, key={self.attack_key!r}")
+                else:
+                    logger.info(
+                        f"[AttackInput] canceled because direction changed "
+                        f"from {attack_direction} to {self.cmd_left_right}")
+                if self.cfg["bot"]["attack"] == "directional":
+                    self.cmd_left_right = "stop"
+                    self.cmd_left_right_last = "stop"
+                self.cmd_action = "none"
             elif self.cmd_action == "add_hp":
                 press_key(self.cfg["key"]["add_hp"])
                 self.cmd_action = "none"  # Reset command

@@ -1,0 +1,27 @@
+bot:
+  map: ant_cave_2
+  mode: patrol
+directional_attack:
+  cooldown: 1.5
+edge_teleport:
+  enable: false
+health_monitor:
+  add_hp_percent: 0
+  add_mp_percent: 0
+  enable: false
+key:
+  add_hp: del
+  add_mp: end
+  directional_attack: shift
+  jump: alt
+monster_detect:
+  diff_thres: 0.22
+  max_mob_area_trigger: 500
+  mode: color
+  with_enemy_hp_bar: false
+nametag:
+  diff_thres: 0.05
+  enable: true
+  global_diff_thres: 0.05
+  mode: histogram_eq
+  name: lark123

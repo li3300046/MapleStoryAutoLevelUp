@@ -37,7 +37,10 @@ class GameWindowCapturor:
         # Get game window title
         self.window_title = get_game_window_title_by_token(cfg["game_window"]["title"])
 
-        resize_window(self.window_title, width=1296, height=759)
+        # The Chinese client has an 18 px horizontal frame and a 9 px vertical
+        # frame. Use an outer size that produces the expected 1282x693 capture
+        # after the 59 px title bar is removed.
+        resize_window(self.window_title, width=1300, height=761)
         
         if self.window_title is None:
             raise RuntimeError(

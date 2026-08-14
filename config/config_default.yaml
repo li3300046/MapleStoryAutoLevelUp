@@ -42,10 +42,11 @@ directional_attack:
   # 🗡️ Directional Attack
   # Directional attacks are basic attack/skills that only attack player left or right.
   # For examples, Mage’s Magic Claw, Thief’s dart throw, or even a snail shell toss are all directional attack
-  range_x: 350               # ↔️ Horizontal attack range (in pixels)
-  range_y: 70                # ↕️ Vertical attack range (in pixels)
+  range_x: 100               # ↔️ Horizontal attack range (in pixels)
+  range_y: 100               # ↕️ Vertical attack range (in pixels)
+  offset_y: 20               # ↕️ Move attack/detection ranges down (in pixels)
   cooldown: 0.9              # ⏱️ Time between attacks (in seconds)
-  character_turn_delay: 0.02 # 🔄 Delay after turning before attacking (in seconds)
+  character_turn_delay: 0.08 # 🔄 Delay after turning before attacking (in seconds)
 
 aoe_skill:
   # 💥 AoE Skill
@@ -111,6 +112,12 @@ nametag:
   # Set to 0.0 to disable this optimization
 
   split_width: 30  # ✂️ pixels width of each vertical split
+  multiscale_min: 0.8
+  multiscale_max: 1.3
+  multiscale_step: 0.05
+  multiscale_ccorr_thres: 0.55
+  multiscale_local_radius: 140
+  tracking_grace_seconds: 0.5
   # To avoid occlusion from ladders or background objects,
   # the nametag will be split vertically and matched in smaller parts.
 
@@ -139,6 +146,14 @@ monster_detect:
   with_enemy_hp_bar: True      # ❤️ Enable smarter detection using enemy HP bars.
   hp_bar_color: [71, 204, 64]  # 💚 Enemy HP bar color (in BGR format)
   max_mob_area_trigger: 1500   # 📏 How much does the mob need to overlap with attack range to be considered as a target
+
+  # Per-target tuning and pet false-positive exclusion.
+  diff_thres_by_monster:
+    zombie_mushroom: 0.22
+    spike_mushroom: 0.30
+  pet_exclusion_templates: ["snowman_nametag_cn"]
+  pet_exclusion_diff_thres: 0.12
+  pet_exclusion_box: [-10, -65, 75, 85] # [x offset, y offset, width, height] from pet nametag
 
 channel_change:
   # 🔁 Auto change channel when other player detected
@@ -288,6 +303,9 @@ patrol:
                                   #     - 1.0 = Right edge
                                   # The player will turn back once reaching these bounds.
   turn_point_thres: 10            # 🔁 Number of consecutive frames required to confirm a turn point
+  direction_change_interval: 8.0  # ⏱️ Reverse periodically when the camera follows the player
+  fallback_player_position_ratio: [0.505, 0.55] # 🎯 Calibrated player estimate used when nametag is temporarily unavailable
+  attack_without_target: False    # ⛔ Do not consume attacks when no monster is detected
   patrol_attack_interval: 2.5     # 🕒 Time in seconds between each attack while patrolling
 
 route_recoder:
@@ -301,7 +319,7 @@ route_recoder:
 game_window:
   # 🪟 Game Window
   # Basic information about the game window setup
-  title: "MapleStory Worlds"   # 🎮 Game window title (used to detect the correct window)
+  title: "冒险岛怀旧服"          # 🎮 Game window title (used to detect the correct window)
   size: [693, 1282]            # 📐 Game window size [height, width] in pixels, (Excluded title bar size)
   ratio_tolerance: 0.08        # 📐 Game window 16:9 tolerance
   title_bar_height: 59         # 📐 Title Bar Height (Note it's before window resize)
