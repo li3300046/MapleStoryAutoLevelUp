@@ -97,12 +97,17 @@ class PatrolState(State):
             boundary_source = "minimap_grace"
 
         boundary_hit = "none"
+        minimap_w = self.bot.img_minimap.shape[1]
+        boundary_tolerance = self.bot.cfg["patrol"].get(
+            "boundary_tolerance_pixels", 1) / float(max(1, minimap_w))
         if control_x_ratio is None:
             self.patrol_turn_point_cnt = 0
-        elif self.is_patrol_to_left and control_x_ratio < left_ratio:
+        elif self.is_patrol_to_left and \
+                control_x_ratio <= left_ratio + boundary_tolerance:
             boundary_hit = "left"
             self.patrol_turn_point_cnt += 1
-        elif (not self.is_patrol_to_left) and control_x_ratio > right_ratio:
+        elif (not self.is_patrol_to_left) and \
+                control_x_ratio >= right_ratio - boundary_tolerance:
             boundary_hit = "right"
             self.patrol_turn_point_cnt += 1
         else:
@@ -110,7 +115,8 @@ class PatrolState(State):
 
         reversal_reason = "none"
         turn_elapsed = now - self.t_last_direction_change
-        if self.patrol_turn_point_cnt > self.bot.cfg["patrol"]["turn_point_thres"]:
+        if self.patrol_turn_point_cnt >= \
+                self.bot.cfg["patrol"]["turn_point_thres"]:
             self.is_patrol_to_left = not self.is_patrol_to_left
             self.patrol_turn_point_cnt = 0
             self.t_last_direction_change = time.time()
@@ -190,7 +196,8 @@ class PatrolState(State):
             self.bot.t_last_attack = time.time()
 
         # If stuck, immediately reverse and jump away from the obstacle.
-        if self.bot.has_valid_player_screen_location and \
+        if reversal_reason == "none" and \
+                self.bot.has_valid_player_screen_location and \
                 self.bot.is_player_stuck():
             self.is_patrol_to_left = not self.is_patrol_to_left
             self.t_last_direction_change = time.time()

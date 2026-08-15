@@ -303,6 +303,7 @@ patrol:
                                   #     - 1.0 = Right edge
                                   # The player will turn back once reaching these bounds.
   turn_point_thres: 10            # 🔁 Number of consecutive frames required to confirm a turn point
+  boundary_tolerance_pixels: 1    # Include quantized minimap edge pixels in patrol bounds
   direction_change_interval: 8.0  # ⏱️ Reverse only when minimap position is unavailable this long
   minimap_position_grace_seconds: 2.0 # Keep the last minimap X through brief detection gaps
   fallback_player_position_ratio: [0.505, 0.55] # 🎯 Calibrated player estimate used when nametag is temporarily unavailable
