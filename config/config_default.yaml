@@ -303,8 +303,11 @@ patrol:
                                   #     - 1.0 = Right edge
                                   # The player will turn back once reaching these bounds.
   turn_point_thres: 10            # 🔁 Number of consecutive frames required to confirm a turn point
-  direction_change_interval: 8.0  # ⏱️ Reverse periodically when the camera follows the player
+  direction_change_interval: 8.0  # ⏱️ Reverse only when minimap position is unavailable this long
+  minimap_position_grace_seconds: 2.0 # Keep the last minimap X through brief detection gaps
   fallback_player_position_ratio: [0.505, 0.55] # 🎯 Calibrated player estimate used when nametag is temporarily unavailable
+  player_position_valid_range: [0.02, 0.10, 0.98, 0.95] # [left, top, right, bottom] ratios of playable frame
+  attack_position_grace_seconds: 2.0 # Reuse the last validated position during brief nametag occlusion
   attack_without_target: False    # ⛔ Do not consume attacks when no monster is detected
   patrol_attack_interval: 2.5     # 🕒 Time in seconds between each attack while patrolling
 
@@ -321,6 +324,8 @@ game_window:
   # Basic information about the game window setup
   title: "冒险岛怀旧服"          # 🎮 Game window title (used to detect the correct window)
   size: [693, 1282]            # 📐 Game window size [height, width] in pixels, (Excluded title bar size)
+  size_tolerance: 4            # Allow small Windows/DPI frame-size differences before resize
+  size_tolerance_ratio: 0.01   # Also allow up to 1% difference on either dimension
   ratio_tolerance: 0.08        # 📐 Game window 16:9 tolerance
   title_bar_height: 59         # 📐 Title Bar Height (Note it's before window resize)
 

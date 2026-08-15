@@ -113,6 +113,10 @@ class MapleStoryAutoBot:
         # coordinate.  Patrol boundary/monster logic is unsafe until at least
         # one valid player position has been acquired.
         self.has_valid_player_screen_location = False
+        self.has_attack_valid_player_screen_location = False
+        self.loc_last_attack_valid_player = None
+        self.t_last_attack_valid_player = 0.0
+        self.is_current_player_position_out_of_range = False
         self.t_last_valid_player_screen_location = 0.0
         self.diag_player_screen_source = "none"
         self.diag_minimap_player_found = False
@@ -135,6 +139,7 @@ class MapleStoryAutoBot:
         # Threads & Objects
         self.kb = None # Keyboard controller
         self.capture = None # Game window capturor
+        self.last_capture_size_adjustment = None
         self.health_monitor = None # Health monitor
         self.profiler = None # Profiler, for performance issue debugging
         self.rune_solver = None # Rune solver
@@ -929,6 +934,21 @@ class MapleStoryAutoBot:
         pet_w, pet_h = pet["size"]
         return (pet_x + pet_w // 2, pet_y + pet_h // 2)
 
+    def is_player_position_in_valid_range(self, location):
+        """Return whether a screen position is safe to use for patrol attacks."""
+        if location is None:
+            return False
+
+        x, y = location
+        frame_h, frame_w = self.img_frame.shape[:2]
+        playable_h = min(frame_h, self.cfg["ui_coords"]["ui_y_start"])
+        left, top, right, bottom = self.cfg["patrol"].get(
+            "player_position_valid_range", [0.02, 0.10, 0.98, 0.95])
+        return (
+            frame_w * left <= x <= frame_w * right and
+            playable_h * top <= y <= playable_h * bottom
+        )
+
     def get_monsters_in_range(self, top_left, bottom_right):
         '''
         get_monsters_in_range
@@ -1167,13 +1187,39 @@ class MapleStoryAutoBot:
                 logger.error(text)
                 return
         else:
-            # Other mode only allow specific resolution
-            if self.cfg["game_window"]["size"] != frame_no_title.shape[:2]:
-                text = f"Unexpeted window size: {frame_no_title.shape[:2]} "\
-                       f"(expect {self.cfg['game_window']['size']})\n"
+            # Windows border metrics can vary by a few physical pixels across
+            # machines/DPI settings even after the outer window is resized.
+            # The frame is normalized below, so accept only a small discrepancy
+            # while continuing to reject genuinely incorrect resolutions.
+            expected_size = tuple(self.cfg["game_window"]["size"])
+            actual_size = frame_no_title.shape[:2]
+            size_tolerance = self.cfg["game_window"].get(
+                "size_tolerance", 4)
+            size_tolerance_ratio = self.cfg["game_window"].get(
+                "size_tolerance_ratio", 0.01)
+            size_delta = tuple(
+                abs(actual - expected)
+                for actual, expected in zip(actual_size, expected_size)
+            )
+            allowed_delta = tuple(
+                max(size_tolerance, expected * size_tolerance_ratio)
+                for expected in expected_size
+            )
+            if any(
+                    delta > allowed
+                    for delta, allowed in zip(size_delta, allowed_delta)):
+                text = f"Unexpected window size: {actual_size} "\
+                       f"(expect {expected_size}, tolerance "\
+                       f"±{size_tolerance_ratio:.0%})\n"
                 text += "Please use windowed mode & smallest resolution."
                 logger.error(text)
                 return
+            if actual_size != expected_size and \
+                    actual_size != self.last_capture_size_adjustment:
+                logger.warning(
+                    f"Normalizing small capture size difference: "
+                    f"{actual_size} -> {expected_size}")
+                self.last_capture_size_adjustment = actual_size
 
         return cv2.resize(frame_no_title, WINDOW_WORKING_SIZE,
                    interpolation=cv2.INTER_NEAREST)
@@ -1320,6 +1366,38 @@ class MapleStoryAutoBot:
             f"Player({self.diag_player_screen_source}) {self.loc_player}",
             (self.loc_player[0] + 10, self.loc_player[1] - 10),
             cv2.FONT_HERSHEY_SIMPLEX, 0.45, player_color, 1, cv2.LINE_AA)
+
+        # Patrol turns around using normalized minimap X. Draw the exact bounds
+        # inside the minimap so Game Window Viz matches the movement decision.
+        if self.cfg["bot"]["mode"] == "patrol":
+            minimap_x, minimap_y = self.loc_minimap
+            minimap_h, minimap_w = self.img_minimap.shape[:2]
+            left_ratio, right_ratio = self.cfg["patrol"]["range"]
+            patrol_bounds = (
+                (left_ratio, "Patrol Left"),
+                (right_ratio, "Patrol Right"),
+            )
+            dash_length = 5
+            dash_gap = 3
+            for ratio, label in patrol_bounds:
+                x_bound = minimap_x + max(
+                    0, min(minimap_w - 1,
+                           int(round(minimap_w * ratio))))
+                for y_start in range(
+                        minimap_y, minimap_y + minimap_h,
+                        dash_length + dash_gap):
+                    cv2.line(
+                        self.img_frame_debug,
+                        (x_bound, y_start),
+                        (x_bound, min(
+                            y_start + dash_length,
+                            minimap_y + minimap_h - 1)),
+                        (0, 0, 255), 2, cv2.LINE_AA)
+                cv2.putText(
+                    self.img_frame_debug,
+                    f"{label} {ratio:.0%}", (x_bound + 3, minimap_y + 14),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.35,
+                    (0, 0, 255), 1, cv2.LINE_AA)
 
         # Draw attack box on debug window
         if self.cfg["bot"]["attack"] == "aoe_skill":
@@ -1815,6 +1893,8 @@ class MapleStoryAutoBot:
             f"nametag_cached={self.diag_nametag_cached}, "
             f"player_screen={self.loc_player}, "
             f"player_screen_valid={self.has_valid_player_screen_location}, "
+            f"player_attack_valid="
+            f"{self.has_attack_valid_player_screen_location}, "
             f"player_screen_source={self.diag_player_screen_source}, "
             f"minimap_player_found={self.diag_minimap_player_found}, "
             f"player_minimap={self.loc_player_minimap}, "
@@ -1920,6 +2000,18 @@ class MapleStoryAutoBot:
             if loc_party_red_bar is not None:
                 self.loc_party_red_bar = loc_party_red_bar
 
+        # A fresh, plausible position is required for patrol attack detection.
+        # Movement may retain a recent position during the grace period, but an
+        # invalid/currently missing detection must not aim attacks at UI pixels.
+        self.has_attack_valid_player_screen_location = False
+        self.is_current_player_position_out_of_range = (
+            self.cfg["bot"]["mode"] == "patrol" and
+            loc_player is not None and
+            not self.is_player_position_in_valid_range(loc_player)
+        )
+        if self.is_current_player_position_out_of_range:
+            loc_player = None
+
         # Update player location
         if loc_player is not None:
             # Check if character is on ladder
@@ -1938,6 +2030,9 @@ class MapleStoryAutoBot:
             self.t_last_valid_player_screen_location = time.time()
             self.diag_player_screen_source = (
                 "nametag" if self.cfg["nametag"]["enable"] else "party_red_bar")
+            self.has_attack_valid_player_screen_location = True
+            self.loc_last_attack_valid_player = loc_player
+            self.t_last_attack_valid_player = time.time()
         elif time.time() - self.t_last_valid_player_screen_location > \
                 self.cfg["nametag"].get("tracking_grace_seconds", 0.5):
             self.has_valid_player_screen_location = False

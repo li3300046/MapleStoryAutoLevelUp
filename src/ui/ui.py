@@ -25,7 +25,7 @@ from src.utils.ui import (
     create_error_label, SingleKeyEdit, QtLogHandler, create_advance_setting_gbox,
 )
 from src.utils.common import (
-    load_yaml, override_cfg, is_mac, save_yaml, get_cfg_diff, load_yaml_with_comments
+    load_yaml, override_cfg, is_mac, save_yaml, load_yaml_with_comments
 )
 
 # window size for each tab
@@ -1101,13 +1101,6 @@ class MainWindow(QMainWindow):
         '''
         Call when user close the UI window
         '''
-        # Collect current UI setting and update to self.cfg
-        self.update_cfg_from_main_ui()
-        # Save current UI config to config_XXXX.yaml
-        if "config_default.yaml" not in self.path_cfg_custom:
-            cfg_diff = get_cfg_diff(self.cfg_base, self.cfg)
-            save_yaml(cfg_diff, self.path_cfg_custom)
-
         # Save your UI state (e.g., last loaded config path)
         self.save_ui_state()
 
