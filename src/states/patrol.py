@@ -2,6 +2,7 @@ import time
 
 # Local import
 from src.states.base_state import State
+from src.utils.logger import logger
 
 class PatrolState(State):
     def __init__(self, name, bot):
@@ -10,9 +11,14 @@ class PatrolState(State):
         self.is_patrol_to_left = True # Patrol direction flag
         self.patrol_turn_point_cnt = 0 # Patrol tuning back counter
         self.t_last_direction_change = time.time()
+        self.origin_minimap_x = None
 
     def on_enter(self):
-        pass
+        # A new patrol run establishes a new origin after the first reliable
+        # player coordinate is detected on the minimap.
+        self.origin_minimap_x = None
+        self.patrol_turn_point_cnt = 0
+        self.t_last_direction_change = time.time()
 
     def on_exit(self):
         pass
@@ -20,25 +26,67 @@ class PatrolState(State):
     def check_transitions(self):
         return None
 
+    def get_start_x_boundary(self):
+        """Return current/left/right minimap X values when they are reliable."""
+        patrol_cfg = self.bot.cfg["patrol"]
+        if not patrol_cfg.get("use_start_x_range", False):
+            return None
+
+        # Both flags describe the current frame. Do not establish an origin or
+        # turn on stale minimap data when the minimap/player dot is unavailable.
+        if not self.bot.diag_minimap_found or \
+                not self.bot.diag_minimap_player_found:
+            return None
+
+        current_x = self.bot.loc_player_minimap[0]
+        if self.origin_minimap_x is None:
+            self.origin_minimap_x = current_x
+            logger.info(
+                "[PatrolState] Set startup minimap X origin to "
+                f"{self.origin_minimap_x}")
+
+        configured_range = patrol_cfg.get("start_x_range", [30, 30])
+        if isinstance(configured_range, (int, float)):
+            left_range = right_range = max(0, configured_range)
+        elif len(configured_range) >= 2:
+            left_range = max(0, configured_range[0])
+            right_range = max(0, configured_range[1])
+        else:
+            return None
+
+        return (
+            current_x,
+            self.origin_minimap_x - left_range,
+            self.origin_minimap_x + right_range,
+        )
+
     def on_frame(self):
         # Patrol mode uses one-frame vertical/action commands. Reset them so a
         # previous jump-down or attack is not held indefinitely.
         self.bot.cmd_move_y = "none"
         self.bot.cmd_action = "none"
 
-        x, y = self.bot.loc_player
-        h, w = self.bot.img_frame.shape[:2]
+        x, _ = self.bot.loc_player
+        _, w = self.bot.img_frame.shape[:2]
         loc_player_ratio = float(x)/float(w)
         left_ratio, right_ratio = self.bot.cfg["patrol"]["range"]
 
-        # Do not use an uninitialised/failed nametag coordinate as a boundary.
-        # Without a valid screen location the timed direction change below is
-        # still sufficient to patrol both ways.
-        if not self.bot.has_valid_player_screen_location:
+        start_x_boundary = self.get_start_x_boundary()
+        if start_x_boundary is not None:
+            current_x, left_x, right_x = start_x_boundary
+            if self.is_patrol_to_left and current_x <= left_x:
+                self.patrol_turn_point_cnt += 1
+            elif (not self.is_patrol_to_left) and current_x >= right_x:
+                self.patrol_turn_point_cnt += 1
+            else:
+                self.patrol_turn_point_cnt = 0
+        # Fall back to the original screen-relative boundary until a reliable
+        # minimap coordinate is available, or when startup range is disabled.
+        elif not self.bot.has_valid_player_screen_location:
             self.patrol_turn_point_cnt = 0
-        elif self.is_patrol_to_left and loc_player_ratio < left_ratio:
+        elif self.is_patrol_to_left and loc_player_ratio <= left_ratio:
             self.patrol_turn_point_cnt += 1
-        elif (not self.is_patrol_to_left) and loc_player_ratio > right_ratio:
+        elif (not self.is_patrol_to_left) and loc_player_ratio >= right_ratio:
             self.patrol_turn_point_cnt += 1
         else:
             self.patrol_turn_point_cnt = 0

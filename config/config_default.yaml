@@ -302,6 +302,8 @@ patrol:
                                   #     - 0.0 = Left edge of the game window
                                   #     - 1.0 = Right edge
                                   # The player will turn back once reaching these bounds.
+  use_start_x_range: True         # 📍 Limit patrol around the startup minimap X coordinate
+  start_x_range: [30, 30]         # ↔️ Allowed minimap pixels [left, right] from the startup coordinate
   turn_point_thres: 10            # 🔁 Number of consecutive frames required to confirm a turn point
   direction_change_interval: 8.0  # ⏱️ Reverse periodically when the camera follows the player
   fallback_player_position_ratio: [0.505, 0.55] # 🎯 Calibrated player estimate used when nametag is temporarily unavailable
