@@ -123,6 +123,10 @@ def create_advance_setting_gbox(title, cfg, comments=None, comments_section=None
     def add_field(key, value):
         tooltip = get_comment(key)
 
+        # This string list is rendered as a dedicated checklist by MainWindow.
+        if title == "monster_detect" and key == "targets":
+            return
+
         if isinstance(value, bool):
             checkbox = QCheckBox()
             checkbox.setChecked(value)

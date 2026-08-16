@@ -142,15 +142,20 @@ monster_detect:
   mode: "contour_only"         # 🧠 Options: "color" "grayscale" "contour_only" "template_free"
   diff_thres: 0.8              # 📏 Diff threshold for template matching, [0.0 ~ 1.0] Lower = stricter match
   search_box_margin: 50        # ➕ Additional margin(in pixels) around the attack box for monster searching
+  search_range_x_multiplier: 7.0 # ↔️ Horizontal monster search range relative to attack range
+  target_side_lock_seconds: 1.5 # 🔒 Minimum time to keep pursuing the selected side
+  target_side_lost_grace_seconds: 0.35 # 👁️ Keep target side through brief detection loss
+  target_side_switch_distance_ratio: 0.60 # 🔁 Other side must be this much closer before switching
   contour_blur: 5              # 🌫️ Gaussian blur kernel size used for contour smoothing (in "contour_only" mode).
   with_enemy_hp_bar: True      # ❤️ Enable smarter detection using enemy HP bars.
   hp_bar_color: [71, 204, 64]  # 💚 Enemy HP bar color (in BGR format)
   max_mob_area_trigger: 1500   # 📏 How much does the mob need to overlap with attack range to be considered as a target
+  targets: [black_axe_stump, wild_boar] # 🎯 Monsters to search for; selectable in Advanced Settings
 
   # Per-target tuning and pet false-positive exclusion.
   diff_thres_by_monster:
-    zombie_mushroom: 0.22
-    spike_mushroom: 0.30
+    black_axe_stump: 0.22
+    wild_boar: 0.30
   pet_exclusion_templates: ["snowman_nametag_cn"]
   pet_exclusion_diff_thres: 0.12
   pet_exclusion_box: [-10, -65, 75, 85] # [x offset, y offset, width, height] from pet nametag
@@ -305,6 +310,8 @@ patrol:
   turn_point_thres: 10            # 🔁 Number of consecutive frames required to confirm a turn point
   boundary_tolerance_pixels: 1    # Include quantized minimap edge pixels in patrol bounds
   direction_change_interval: 8.0  # ⏱️ Reverse only when minimap position is unavailable this long
+  random_jump_interval: [2.0, 3.0] # 🎲 Random jump interval range in seconds
+  random_turn_interval: [5.0, 7.0] # 🎲 Random direction-change interval range in seconds
   minimap_position_grace_seconds: 2.0 # Keep the last minimap X through brief detection gaps
   fallback_player_position_ratio: [0.505, 0.55] # 🎯 Calibrated player estimate used when nametag is temporarily unavailable
   player_position_valid_range: [0.02, 0.10, 0.98, 0.95] # [left, top, right, bottom] ratios of playable frame

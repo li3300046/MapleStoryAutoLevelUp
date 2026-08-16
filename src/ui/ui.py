@@ -174,6 +174,9 @@ class MainWindow(QMainWindow):
             else:
                 right_col.addWidget(gbox)
 
+        self.monster_checklist_gbox = self.create_monster_checklist_gbox()
+        right_col.addWidget(self.monster_checklist_gbox)
+
         # Wrap columns in a horizontal layout
         row_layout = QHBoxLayout()
         row_layout.addLayout(left_col)
@@ -192,6 +195,36 @@ class MainWindow(QMainWindow):
         tab_advance_setting.setLayout(final_layout)
 
         return tab_advance_setting
+
+    def create_monster_checklist_gbox(self):
+        """Create checkboxes that control which monster templates are loaded."""
+        gbox = QGroupBox("🎯 Monster Checklist")
+        layout = QVBoxLayout()
+        self.monster_checkboxes = {}
+
+        monster_names = sorted({
+            monster
+            for monsters in self.data["map_mobs_mapping"].values()
+            for monster in monsters
+        })
+        for monster_name in monster_names:
+            translated_name = self.data["eng_to_cn"].get(monster_name)
+            label = (f"{monster_name} ({translated_name})"
+                     if translated_name else monster_name)
+            checkbox = QCheckBox(label)
+            checkbox.stateChanged.connect(self.update_monster_targets_from_ui)
+            layout.addWidget(checkbox)
+            self.monster_checkboxes[monster_name] = checkbox
+
+        gbox.setToolTip("Select the monster templates used for detection.")
+        gbox.setLayout(layout)
+        return gbox
+
+    def update_monster_targets_from_ui(self):
+        self.cfg["monster_detect"]["targets"] = [
+            name for name, checkbox in self.monster_checkboxes.items()
+            if checkbox.isChecked()
+        ]
 
     def setup_game_window_viz_tab(self):
         tab_game_window_viz = QWidget()
@@ -752,6 +785,7 @@ class MainWindow(QMainWindow):
             self.map_selection_gbox,
         ]
         gboxs += list(self.advance_settings_gboxes.values())
+        gboxs.append(self.monster_checklist_gbox)
         # Apply disable + style
         for gbox in gboxs:
             gbox.setEnabled(enabled)
@@ -1007,6 +1041,13 @@ class MainWindow(QMainWindow):
                 # String
                 elif isinstance(value, str) and isinstance(widget, QLineEdit):
                     widget.setText(value)
+
+        selected_monsters = set(
+            self.cfg["monster_detect"].get("targets", []))
+        for name, checkbox in self.monster_checkboxes.items():
+            checkbox.blockSignals(True)
+            checkbox.setChecked(name in selected_monsters)
+            checkbox.blockSignals(False)
 
     def add_buff_row(self, key="", cooldown=""):
         row_widget = QWidget()

@@ -1,4 +1,5 @@
 import time
+import random
 
 # Local import
 from src.states.base_state import State
@@ -15,6 +16,21 @@ class PatrolState(State):
         self.last_minimap_x_ratio = None
         self.t_last_minimap_position = 0.0
         self.t_last_minimap_fallback_turn = time.time()
+        self.t_next_random_jump = 0.0
+        self.t_next_random_turn = 0.0
+
+    def get_next_random_action_time(self, config_key, default_range):
+        """Return the deadline for the next randomly timed patrol action."""
+        interval = self.bot.cfg["patrol"].get(config_key, default_range)
+        try:
+            interval_min, interval_max = sorted(
+                (float(interval[0]), float(interval[1])))
+        except (TypeError, ValueError, IndexError):
+            logger.warning(
+                f"Invalid patrol.{config_key}={interval}; "
+                f"using {default_range}.")
+            interval_min, interval_max = default_range
+        return time.time() + random.uniform(interval_min, interval_max)
 
     def log_patrol_diagnostic(
             self, boundary_hit, control_x_ratio, boundary_source,
@@ -60,7 +76,10 @@ class PatrolState(State):
         self.t_last_patrol_diagnostic = now
 
     def on_enter(self):
-        pass
+        self.t_next_random_jump = self.get_next_random_action_time(
+            "random_jump_interval", (2.0, 3.0))
+        self.t_next_random_turn = self.get_next_random_action_time(
+            "random_turn_interval", (5.0, 7.0))
 
     def on_exit(self):
         pass
@@ -121,6 +140,8 @@ class PatrolState(State):
             self.patrol_turn_point_cnt = 0
             self.t_last_direction_change = time.time()
             self.t_last_minimap_fallback_turn = now
+            self.t_next_random_turn = self.get_next_random_action_time(
+                "random_turn_interval", (5.0, 7.0))
             reversal_reason = "boundary_confirmed"
         elif control_x_ratio is None and \
                 now - max(
@@ -130,7 +151,17 @@ class PatrolState(State):
             self.is_patrol_to_left = not self.is_patrol_to_left
             self.t_last_direction_change = time.time()
             self.t_last_minimap_fallback_turn = now
+            self.t_next_random_turn = self.get_next_random_action_time(
+                "random_turn_interval", (5.0, 7.0))
             reversal_reason = "minimap_lost_timer"
+        elif now >= self.t_next_random_turn:
+            self.is_patrol_to_left = not self.is_patrol_to_left
+            self.patrol_turn_point_cnt = 0
+            self.t_last_direction_change = now
+            self.t_last_minimap_fallback_turn = now
+            self.t_next_random_turn = self.get_next_random_action_time(
+                "random_turn_interval", (5.0, 7.0))
+            reversal_reason = "random_timer"
 
         self.log_patrol_diagnostic(
             boundary_hit, control_x_ratio, boundary_source,
@@ -195,12 +226,21 @@ class PatrolState(State):
             self.bot.cmd_action = "attack"
             self.bot.t_last_attack = time.time()
 
+        # Add occasional movement variation without interrupting an attack
+        # already selected for this frame.
+        if now >= self.t_next_random_jump and self.bot.cmd_action == "none":
+            self.bot.cmd_action = "jump"
+            self.t_next_random_jump = self.get_next_random_action_time(
+                "random_jump_interval", (2.0, 3.0))
+
         # If stuck, immediately reverse and jump away from the obstacle.
         if reversal_reason == "none" and \
                 self.bot.has_valid_player_screen_location and \
                 self.bot.is_player_stuck():
             self.is_patrol_to_left = not self.is_patrol_to_left
             self.t_last_direction_change = time.time()
+            self.t_next_random_turn = self.get_next_random_action_time(
+                "random_turn_interval", (5.0, 7.0))
             self.bot.cmd_move_x = "left" if self.is_patrol_to_left else "right"
             self.bot.cmd_move_y = "none"
             self.bot.cmd_action = "jump"

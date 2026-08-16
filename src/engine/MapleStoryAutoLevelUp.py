@@ -103,6 +103,11 @@ class MapleStoryAutoBot:
         self.t_last_minimap_update = time.time()
         self.t_to_change_channel = time.time()
         self.t_last_diagnostic = 0.0
+        # Monster pursuit side is sticky so simultaneous left/right detections
+        # cannot make movement alternate every frame.
+        self.monster_target_side = None
+        self.t_monster_target_side_locked_until = 0.0
+        self.t_monster_target_side_last_seen = 0.0
         # Runtime diagnostics for the capture -> detection -> command pipeline.
         self.diag_minimap_found = False
         self.diag_nametag_found = False
@@ -173,6 +178,10 @@ class MapleStoryAutoBot:
         '''
         load_config
         '''
+        self.monster_target_side = None
+        self.t_monster_target_side_locked_until = 0.0
+        self.t_monster_target_side_last_seen = 0.0
+
         # Parse color code in config
         self.color_code = {
             tuple(map(int, k.split(','))): v
@@ -209,8 +218,17 @@ class MapleStoryAutoBot:
                         self.img_map, img, cfg["route"]["color_code_up_down"])
                     self.img_routes.append(img)
 
-            # Both normal and patrol modes detect the selected map's monsters.
-            for monster_name in self.data["map_mobs_mapping"][map_name]:
+            # A user-selected target list overrides the map defaults. Direct
+            # callers without this option keep the original map-based behavior.
+            monster_targets = cfg["monster_detect"].get("targets")
+            if monster_targets is None:
+                monster_targets = self.data["map_mobs_mapping"][map_name]
+            if not monster_targets:
+                logger.error("No monster selected in Advanced Settings.")
+                return -1
+
+            # Both normal and patrol modes detect the selected monsters.
+            for monster_name in monster_targets:
                 imgs = []
                 monster_files = glob.glob(
                     f"monster/{monster_name}/{monster_name}*.png")
@@ -884,6 +902,60 @@ class MapleStoryAutoBot:
                     nearest_monster = monster
 
         return nearest_monster
+
+    def choose_monster_target_side(self, monsters, now=None):
+        """Choose a stable pursuit side for monsters in the wider search box."""
+        if now is None:
+            now = time.time()
+
+        nearest_distance = {}
+        for monster in monsters:
+            monster_x, _ = monster["position"]
+            monster_w, _ = monster["size"]
+            delta_x = monster_x + monster_w // 2 - self.loc_player[0]
+            if delta_x == 0:
+                continue
+            side = "left" if delta_x < 0 else "right"
+            nearest_distance[side] = min(
+                nearest_distance.get(side, float("inf")), abs(delta_x))
+
+        detect_cfg = self.cfg["monster_detect"]
+        lock_seconds = detect_cfg.get("target_side_lock_seconds", 1.5)
+        lost_grace = detect_cfg.get(
+            "target_side_lost_grace_seconds", 0.35)
+        switch_ratio = detect_cfg.get(
+            "target_side_switch_distance_ratio", 0.60)
+        current_side = self.monster_target_side
+
+        if current_side in nearest_distance:
+            self.t_monster_target_side_last_seen = now
+        elif current_side is not None and \
+                now - self.t_monster_target_side_last_seen <= lost_grace:
+            return current_side
+        else:
+            current_side = None
+
+        if current_side is None and nearest_distance:
+            moving_side = self.cmd_move_x
+            if moving_side in nearest_distance:
+                current_side = moving_side
+            else:
+                current_side = min(nearest_distance, key=nearest_distance.get)
+            self.t_monster_target_side_locked_until = now + lock_seconds
+            self.t_monster_target_side_last_seen = now
+        elif current_side is not None and \
+                now >= self.t_monster_target_side_locked_until:
+            other_side = "right" if current_side == "left" else "left"
+            if other_side in nearest_distance and (
+                    current_side not in nearest_distance or
+                    nearest_distance[other_side] <
+                    nearest_distance[current_side] * switch_ratio):
+                current_side = other_side
+                self.t_monster_target_side_locked_until = now + lock_seconds
+                self.t_monster_target_side_last_seen = now
+
+        self.monster_target_side = current_side
+        return current_side
 
     def get_pet_exclusion_boxes(self, img_roi, roi_origin):
         """Locate configured pet nametags and return sprite exclusion boxes."""
@@ -1786,15 +1858,18 @@ class MapleStoryAutoBot:
             self.cmd_action = "jump"
 
     def update_cmd_by_mob_detection(self):
-        # Get monster search box
-        margin = self.cfg["monster_detect"]["search_box_margin"]
+        # Detect farther horizontally than the actual attack box. The vertical
+        # search range stays identical to the configured attack range.
+        range_multiplier = self.cfg["monster_detect"].get(
+            "search_range_x_multiplier", 7.0)
         if self.cfg["bot"]["attack"] == "aoe_skill":
-            dx = self.cfg["aoe_skill"]["range_x"] // 2 + margin
-            dy = self.cfg["aoe_skill"]["range_y"] // 2 + margin
+            dx = int(self.cfg["aoe_skill"]["range_x"] * range_multiplier / 2)
+            dy = self.cfg["aoe_skill"]["range_y"] // 2
             cooldown = self.cfg["aoe_skill"]["cooldown"]
         elif self.cfg["bot"]["attack"] == "directional":
-            dx = self.cfg["directional_attack"]["range_x"] + margin
-            dy = self.cfg["directional_attack"]["range_y"] + margin
+            dx = int(
+                self.cfg["directional_attack"]["range_x"] * range_multiplier)
+            dy = self.cfg["directional_attack"]["range_y"] // 2
             search_offset_y = self.cfg["directional_attack"].get("offset_y", 0)
             cooldown = self.cfg["directional_attack"]["cooldown"]
         else:
@@ -1813,7 +1888,14 @@ class MapleStoryAutoBot:
 
         # Check if no mob to attack
         if len(self.monsters) == 0:
+            target_side = self.choose_monster_target_side(self.monsters)
+            if target_side is not None:
+                self.cmd_move_x = target_side
             return
+
+        target_side = self.choose_monster_target_side(self.monsters)
+        if target_side is not None:
+            self.cmd_move_x = target_side
 
         # Update attack command
         if self.cfg["bot"]["attack"] == "aoe_skill":
@@ -1826,7 +1908,17 @@ class MapleStoryAutoBot:
             monster_left  = self.get_nearest_monster(is_left = True)
             monster_right = self.get_nearest_monster(is_left = False)
             # Determine attack direction
-            attack_direction = self.get_attack_direction(monster_left, monster_right)
+            monster_by_side = {
+                "left": monster_left,
+                "right": monster_right,
+            }
+            if target_side:
+                attack_direction = (
+                    target_side
+                    if monster_by_side[target_side] is not None else None)
+            else:
+                attack_direction = self.get_attack_direction(
+                    monster_left, monster_right)
             if attack_direction is not None:
                 # Do not keep walking through an in-range monster while the
                 # attack is cooling down. Face it only when issuing the attack;
